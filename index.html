@@ -208,6 +208,8 @@ function push(){
   return withTimeout(fetch(FB+"/data.json",{method:"PUT",body:JSON.stringify(db)}),15000).then(function(r){
     if(!r.ok)throw r.status;
     if(db.updatedAt===sent)localStorage.removeItem(DKEY);
+    fetch(FB+"/meta.json",{method:"PUT",body:JSON.stringify({updatedAt:sent})}).catch(function(){});
+    localStorage.setItem(SKEY,String(sent));
     setSync("Tersinkron online "+stamp());
   }).catch(function(){setSync("Gagal sinkron – tersimpan lokal")});
 }
@@ -215,11 +217,45 @@ function pushPw(){
   var h=localStorage.getItem(AKEY_P);if(!h||!navigator.onLine)return;
   fetch(FB+"/auth/adminHash.json",{method:"PUT",body:JSON.stringify(h)}).then(function(r){if(r.ok)localStorage.removeItem(AKEY_P)}).catch(function(){});
 }
+var SKEY="dps_glhgsdr_lastsync", GKEY="dps_glhgsdr_gh", TKEY="dps_glhgsdr_ghtoken";
+/* Konfigurasi repositori GitHub default untuk Viewer (boleh diisi langsung di sini) */
+var GH_DEF={owner:"",repo:"",branch:"main",path:"data-pelanggaran.json"};
+function ghCfg(){var c={};try{c=JSON.parse(localStorage.getItem(GKEY)||"{}")||{}}catch(e){}
+  return {owner:c.owner||GH_DEF.owner,repo:c.repo||GH_DEF.repo,branch:c.branch||GH_DEF.branch,path:c.path||GH_DEF.path}}
+function ghReady(c){return c.owner&&c.repo&&c.path}
+function getGhCfg(){
+  var c=ghCfg();if(ghReady(c)||!navigator.onLine)return Promise.resolve(c);
+  /* sekali saja: ambil lokasi repo (data kecil) lalu disimpan permanen di perangkat */
+  return withTimeout(fetch(FB+"/gh.json").then(function(r){return r.json()}),8000).then(function(g){
+    if(g&&g.owner){localStorage.setItem(GKEY,JSON.stringify(g));return ghCfg()}return c}).catch(function(){return c});
+}
+function b64utf8(str){var b=new TextEncoder().encode(str),out="";for(var i=0;i<b.length;i+=0x8000)out+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(out)}
+function pullViewer(){
+  getGhCfg().then(function(c){
+    if(!ghReady(c)){setSync("Repositori GitHub belum diatur – data lokal");return}
+    var url="https://raw.githubusercontent.com/"+c.owner+"/"+c.repo+"/"+c.branch+"/"+c.path.split("/").map(encodeURIComponent).join("/")+"?t="+Date.now();
+    return withTimeout(fetch(url,{cache:"no-store"}),15000).then(function(r){if(!r.ok)throw r.status;return r.json()}).then(function(remote){
+      remote=normalize(remote&&remote.data&&remote.students==null?remote.data:remote);
+      if((remote.updatedAt||0)!==(db.updatedAt||0)||legacyLocal){db=remote;legacyLocal=false;localStorage.setItem(KEY,JSON.stringify(db));render()}
+      setSync("Tersinkron (GitHub) "+stamp());
+    });
+  }).catch(function(){setSync("Gagal memuat dari GitHub – data lokal")});
+}
 function pull(){
   if(!ROLE)return;
   if(!navigator.onLine){setSync("Offline – data lokal");return}
+  if(ROLE==="viewer"){setSync("Memuat...");pullViewer();return}
   pushPw();
   if(localStorage.getItem(DKEY)&&ROLE==="admin"){push();return}
+  setSync("Memeriksa pembaruan...");
+  /* Hemat read: cek dulu penanda waktu kecil (meta). Data penuh hanya diunduh bila ada perubahan. */
+  withTimeout(fetch(FB+"/meta/updatedAt.json"),10000).then(function(r){if(!r.ok)throw r.status;return r.json()}).then(function(mt){
+    if(mt&&!legacyLocal&&db.updatedAt&&mt===db.updatedAt){setSync("Tersinkron online "+stamp()+" (tidak ada perubahan)");return}
+    if(mt&&!legacyLocal&&db.updatedAt&&mt<db.updatedAt){push();return}
+    pullFull();
+  }).catch(function(){setSync("Gagal terhubung – data lokal")});
+}
+function pullFull(){
   withTimeout(fetch(FB+"/data.json"),15000).then(function(r){if(!r.ok)throw r.status;return r.json()}).then(function(remote){
     if(!remote){
       if(hasData(db)&&ROLE==="admin"){if(!db.updatedAt)db.updatedAt=Date.now();save()}
@@ -237,6 +273,7 @@ function pull(){
     }
     if((remote.updatedAt||0)>(db.updatedAt||0)){
       db=remote;localStorage.setItem(KEY,JSON.stringify(db));render();
+      if(db.updatedAt)fetch(FB+"/meta.json",{method:"PUT",body:JSON.stringify({updatedAt:db.updatedAt})}).catch(function(){});
     }else if((remote.updatedAt||0)<(db.updatedAt||0)&&ROLE==="admin"){push();return}
     setSync("Tersinkron online "+stamp());
   }).catch(function(){setSync("Gagal terhubung – data lokal")});
@@ -327,7 +364,7 @@ var page="dash";
 function renderNav(){
   $("#nav").innerHTML=PAGES.filter(function(p){return allowed(p[0])}).map(function(p){
     return '<button data-p="'+p[0]+'" class="'+(page===p[0]?"active":"")+'">'+p[1]+'</button>';
-  }).join("")+'<div class="who">Masuk sebagai: <b>'+(ROLE==="admin"?"Admin":"Viewer")+'</b><br><span id="syncSt">'+esc(syncSt)+'</span>'+
+  }).join("")+'<div class="who">Masuk sebagai: <b>'+(ROLE==="admin"?"Admin":"Viewer")+'</b><br><span id="syncSt">'+esc(syncSt)+'</span><br><button class="btn sec" id="syncBtn" type="button" style="margin-top:6px;padding:4px 10px;font-size:12px">⟳ Sinkron</button>'+
   '<button id="logout">⎋ Keluar</button></div>';
 }
 $("#nav").addEventListener("click",function(e){
@@ -783,6 +820,13 @@ function vBackup(){
   '<h3>Gabungkan Beberapa Backup</h3><p class="muted">Pilih satu atau beberapa file backup sekaligus. Data digabung ke data saat ini tanpa menghapus apa pun. Siswa dicocokkan lewat NISN (atau nama+kelas), jenis pelanggaran lewat kategori+nama. Catatan yang sama (siswa, tanggal, pelanggaran, jam datang sama) tidak digandakan — data yang ada dipertahankan, catatan/keterangan dilengkapi bila sebelumnya kosong.</p>'+
   '<div class="btns"><label class="btn" style="cursor:pointer">🔀 Pilih File untuk Digabung<input type="file" id="mrg" multiple accept="application/json,.json" style="display:none"></label></div>'+
   '<div id="mrgRes"></div>'+
+  '<h3>Bagikan Backup</h3><p class="muted">Kirim file backup JSON lewat WhatsApp, Telegram, Google Drive, email, dll.</p>'+
+  '<div class="btns"><button class="btn" id="shareBk">📤 Share Backup</button></div>'+
+  (ROLE==="admin"?(function(){var c=ghCfg();return '<h3>Simpan JSON ke GitHub (untuk Viewer)</h3><p class="muted">File JSON ini yang dibaca oleh Viewer. Token hanya tersimpan di perangkat ini.</p>'+
+  '<div class="row"><div><label class="f">Pemilik (owner)</label><input id="ghO" value="'+esc(c.owner)+'"></div><div><label class="f">Repositori</label><input id="ghR" value="'+esc(c.repo)+'"></div></div>'+
+  '<div class="row"><div><label class="f">Branch</label><input id="ghB" value="'+esc(c.branch)+'"></div><div><label class="f">Path file</label><input id="ghP" value="'+esc(c.path)+'"></div></div>'+
+  '<div><label class="f">Token GitHub (izin Contents: Read & Write)</label><input type="password" id="ghT" autocomplete="off" value="'+esc(localStorage.getItem(TKEY)||"")+'"></div>'+
+  '<div class="btns"><button class="btn" id="ghSave">💾 Save JSON ke GitHub</button></div><div id="ghRes" class="muted"></div>'})():"")+
   '<h3>Autobackup</h3><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="ab" '+(db.settings.autobackup?"checked":"")+' style="width:18px;height:18px"> Aktifkan autobackup otomatis setiap perubahan</label>'+
   '<p class="muted">Autobackup terakhir: '+(ab?new Date(ab.at).toLocaleString("id-ID"):"belum ada")+'</p>'+
   '<div class="btns"><button class="btn sec" id="abDl">⬇ Unduh Autobackup</button><button class="btn sec" id="abRes">↺ Pulihkan dari Autobackup</button></div></div>'+
@@ -1003,6 +1047,30 @@ function bind(){
       var el=$("#mrgRes");if(el)el.innerHTML=html;toast("Penggabungan selesai.");
     });
   });
+  on("#shareBk","click",function(){
+    var name="backup-pelanggaran-"+todayISO()+".json",txt=JSON.stringify(db,null,2);
+    var f=null;try{f=new File([txt],name,{type:"application/json"})}catch(e){}
+    if(f&&navigator.canShare&&navigator.canShare({files:[f]})){
+      navigator.share({files:[f],title:"Backup Data Pelanggaran",text:"Backup data pelanggaran "+todayISO()}).catch(function(){});
+    }else{download(name,txt,"application/json");toast("Perangkat/browser tidak mendukung share file. File backup diunduh, silakan kirim manual.")}
+  });
+  on("#ghSave","click",function(){
+    var c={owner:$("#ghO").value.trim(),repo:$("#ghR").value.trim(),branch:$("#ghB").value.trim()||"main",path:$("#ghP").value.trim().replace(/^\/+/,"")};
+    var tk=$("#ghT").value.trim(),res=$("#ghRes");
+    if(!ghReady(c)||!tk)return toast("Lengkapi owner, repositori, path dan token.");
+    localStorage.setItem(GKEY,JSON.stringify(c));localStorage.setItem(TKEY,tk);
+    fetch(FB+"/gh.json",{method:"PUT",body:JSON.stringify(c)}).catch(function(){});
+    var api="https://api.github.com/repos/"+c.owner+"/"+c.repo+"/contents/"+c.path.split("/").map(encodeURIComponent).join("/");
+    var H={"Authorization":"Bearer "+tk,"Accept":"application/vnd.github+json"};
+    res.textContent="Menyimpan ke GitHub...";
+    fetch(api+"?ref="+encodeURIComponent(c.branch),{headers:H,cache:"no-store"}).then(function(r){return r.ok?r.json():null}).then(function(ex){
+      var body={message:"Update data pelanggaran "+new Date().toLocaleString("id-ID"),content:b64utf8(JSON.stringify(db)),branch:c.branch};
+      if(ex&&ex.sha)body.sha=ex.sha;
+      return fetch(api,{method:"PUT",headers:H,body:JSON.stringify(body)});
+    }).then(function(r){return r.json().then(function(j){if(!r.ok)throw (j&&j.message)||r.status;return j})}).then(function(){
+      res.textContent="Berhasil disimpan ke GitHub "+stamp();toast("JSON berhasil disimpan ke GitHub.");
+    }).catch(function(e){res.textContent="Gagal: "+e;toast("Gagal menyimpan ke GitHub: "+e)});
+  });
   on("#ab","change",function(){db.settings.autobackup=this.checked;save();render()});
   on("#abDl","click",function(){
     var s=localStorage.getItem(BKEY);if(!s)return toast("Belum ada autobackup.");
@@ -1125,7 +1193,8 @@ $("#loginF").addEventListener("submit",function(e){
 var savedRole=sessionStorage.getItem("dps_role");
 if(savedRole==="admin"||savedRole==="viewer")enter(savedRole);else showLogin();
 window.addEventListener("online",pull);
-setInterval(function(){if(ROLE)pull()},30000);
+/* Tidak ada polling otomatis (hemat kuota read). Gunakan tombol Sinkron. */
+document.addEventListener("click",function(e){if(e.target&&e.target.id==="syncBtn"){pull()}});
 })();
 </script>
 </body>
