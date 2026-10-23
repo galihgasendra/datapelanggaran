@@ -381,7 +381,7 @@ function renderHead(){
   $("#tpLabel").textContent=tpOf(state.tanggal||todayISO());
 }
 
-var state={kelas:"",cari:"",tanggal:todayISO(),rekap:{d1:"",d2:"",kelas:"",cat:"",cari:""},det:{kelas:"",cari:"",sid:"",d1:"",d2:"",cat:"",mode:"harian"}};
+var state={kelas:"",cari:"",tanggal:todayISO(),rekap:{d1:"",d2:"",kelas:"",cat:"",cari:""},det:{kelas:"",cari:"",sid:"",d1:"",d2:"",cat:"",mode:"mingguan",zoom:1}};
 
 /* ============ RENDER ============ */
 var VIEW_OK_BTN={rToday:1,rReset:1,expDetail:1,expRekap:1,expPerSiswa:1,doPrint:1,expTelat:1,expStud:1,dExp:1,dPdf:1,dPrint:1,dReset:1};
@@ -731,18 +731,31 @@ function weekKey(iso){
   var m=["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
   return d.getDate()+" "+m[d.getMonth()]+" "+d.getFullYear();
 }
-function lineChartHTML(recs,mode,nama){
-  if(!recs.length)return '<p class="muted">Tidak ada pelanggaran pada filter ini.</p>';
+function lineChartHTML(recs,mode,nama,d1,d2,zoom){
+  if(!recs.length&&!(d1&&d2))return '<p class="muted">Tidak ada pelanggaran pada filter ini.</p>';
+  zoom=zoom||1;
   var g={};
   recs.forEach(function(r){
-    var k=mode==="harian"?r.tanggal:(mode==="mingguan"?weekKey(r.tanggal):r.tanggal.slice(0,7));
-    var sortK=mode==="mingguan"?weekKeyISO(r.tanggal):(mode==="bulanan"?r.tanggal.slice(0,7):r.tanggal);
-    g[sortK]=g[sortK]||{label:k,p:0,n:0};g[sortK].p+=poinOf(r);g[sortK].n++;
+    var sortK=mode==="mingguan"?weekKeyISO(r.tanggal):r.tanggal.slice(0,7);
+    g[sortK]=g[sortK]||{p:0,n:0};g[sortK].p+=poinOf(r);g[sortK].n++;
   });
-  var arr=Object.keys(g).sort().map(function(k){return g[k]});
+  var start=d1||(recs.length?recs[0].tanggal:todayISO()), end=d2||todayISO();
+  if(recs.length&&!d2&&recs[recs.length-1].tanggal>end)end=recs[recs.length-1].tanggal;
+  if(end<start){var tmp=start;start=end;end=tmp}
+  var BL=["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
+  var arr=[],guard=0;
+  if(mode==="mingguan"){
+    var c=new Date(weekKeyISO(start)+"T00:00:00"),e=new Date(end+"T00:00:00");
+    while(c<=e&&guard++<2000){var iso=c.getFullYear()+"-"+String(c.getMonth()+1).padStart(2,"0")+"-"+String(c.getDate()).padStart(2,"0");
+      var v=g[iso]||{p:0,n:0};arr.push({label:weekKey(iso),p:v.p,n:v.n});c.setDate(c.getDate()+7);}
+  }else{
+    var y=+start.slice(0,4),m=+start.slice(5,7),ey=+end.slice(0,4),em=+end.slice(5,7);
+    while((y<ey||(y===ey&&m<=em))&&guard++<2000){var k=y+"-"+String(m).padStart(2,"0");
+      var v2=g[k]||{p:0,n:0};arr.push({label:BL[m-1]+" "+y,p:v2.p,n:v2.n});m++;if(m>12){m=1;y++}}
+  }
   var max=arr.reduce(function(m,x){return Math.max(m,x.p)},0)||1;
-  var judul=mode==="harian"?"Harian":(mode==="mingguan"?"Mingguan (mulai Senin)":"Bulanan");
-  var W=Math.max(600,arr.length*70),H=260,pl=40,pr=30,pt=24,pb=50,iw=W-pl-pr,ih=H-pt-pb;
+  var judul=mode==="mingguan"?"Mingguan (mulai Senin)":"Bulanan";
+  var W=Math.round(Math.max(600,arr.length*70)*zoom),H=260,pl=40,pr=30,pt=24,pb=50,iw=W-pl-pr,ih=H-pt-pb;
   var X=function(i){return pl+(arr.length===1?iw/2:i*iw/(arr.length-1))},Y=function(v){return pt+ih-v/max*ih};
   var grid="";for(var gi=0;gi<=4;gi++){var gv=Math.round(max*gi/4),gy=Y(max*gi/4);grid+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+gy+'" y2="'+gy+'" stroke="#e5e0d4"/><text x="'+(pl-6)+'" y="'+(gy+4)+'" font-size="11" text-anchor="end" fill="#6b7280">'+gv+'</text>'}
   var pts=arr.map(function(x,i){return X(i)+","+Y(x.p)}).join(" ");
@@ -750,7 +763,8 @@ function lineChartHTML(recs,mode,nama){
     '<text x="'+X(i)+'" y="'+(Y(x.p)-10)+'" font-size="11" text-anchor="middle" fill="#203d46" font-weight="700">'+x.p+'</text>'+
     '<text x="'+X(i)+'" y="'+(H-pb+18)+'" font-size="10" text-anchor="middle" fill="#374151">'+esc(x.label)+'</text>'+
     '<text x="'+X(i)+'" y="'+(H-pb+32)+'" font-size="10" text-anchor="middle" fill="#6b7280">'+x.n+'x</text>'}).join("");
-  return '<h3>Grafik '+judul+' — '+esc(nama||"")+'</h3><div style="overflow-x:auto"><svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" style="max-width:none;background:#fffdfa">'+grid+
+  var zb='<div class="btns" style="align-items:center"><button class="btn sm sec" id="dZo" title="Perkecil">➖ Zoom Out</button><span class="muted">'+Math.round(zoom*100)+'%</span><button class="btn sm sec" id="dZi" title="Perbesar">➕ Zoom In</button><button class="btn sm sec" id="dZf">Sesuaikan Layar</button><button class="btn sm sec" id="dZr">100%</button></div>';
+  return '<h3>Grafik '+judul+' — '+esc(nama||"")+'</h3>'+zb+'<div id="dChartBox" style="overflow-x:auto"><svg data-basew="'+Math.round(Math.max(600,arr.length*70))+'" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" style="max-width:none;background:#fffdfa">'+grid+
     '<polyline points="'+pts+'" fill="none" stroke="#203d46" stroke-width="2.5" stroke-linejoin="round"/>'+dots+'</svg></div>'+
     '<p class="muted">Angka di atas titik = total poin; di bawah label = jumlah pelanggaran.</p>';
 }
@@ -789,8 +803,8 @@ function vDetail(){
    '<p class="muted">'+esc(db.school||"")+' · Kelas '+esc(s.kelas||"-")+' · NISN '+esc(s.nisn||"-")+' · JK '+esc(s.jk||"-")+' · Periode: '+esc(per)+(f.cat?' · Kategori: '+esc(f.cat):"")+'</p>'+
    '<div class="stats">'+stat(recs.length,"Jumlah Pelanggaran")+stat(tot,"Total Poin Pelanggaran")+stat(totalPoin(s.id),"Total Poin Keseluruhan")+'</div>'+
    '<h3>Grafik Perubahan Pelanggaran</h3><div class="row btns"><div><label class="f">Periode grafik</label><select id="dM">'+
-   ['harian','mingguan','bulanan'].map(function(m){return '<option value="'+m+'" '+(f.mode===m?"selected":"")+'>'+m.charAt(0).toUpperCase()+m.slice(1)+'</option>'}).join("")+
-   '</select></div></div>'+lineChartHTML(recs,f.mode,s.nama)+
+   ['mingguan','bulanan'].map(function(m){return '<option value="'+m+'" '+(f.mode===m?"selected":"")+'>'+m.charAt(0).toUpperCase()+m.slice(1)+'</option>'}).join("")+
+   '</select></div></div>'+lineChartHTML(recs,f.mode==='bulanan'?'bulanan':'mingguan',s.nama,f.d1,f.d2,f.zoom||1)+
    '<h3>Detail Pelanggaran ('+recs.length+')</h3>'+
    tableHTML(["No","Tanggal","Pelanggaran","Kategori","Poin","Catatan","Aksi"],recs.map(function(r,i){
      return [i+1,r.tanggal,esc(namaOf(r))+(r.telat?' <span class="muted">('+esc(r.jamDatang||"")+', '+menitTelat(r)+' mnt)</span>':""),
@@ -860,8 +874,13 @@ function bind(){
   on("#dD1","change",function(){state.det.d1=this.value;render()});
   on("#dD2","change",function(){state.det.d2=this.value;render()});
   on("#dC","change",function(){state.det.cat=this.value;render()});
-  on("#dM","change",function(){state.det.mode=this.value;render()});
-  on("#dReset","click",function(){state.det={kelas:"",cari:"",sid:state.det.sid,d1:"",d2:"",cat:"",mode:"harian"};render()});
+  on("#dM","change",function(){state.det.mode=this.value;state.det.zoom=1;render()});
+  function setZoom(z){var sx=window.scrollY;state.det.zoom=Math.max(0.1,Math.min(5,Math.round(z*100)/100));render();window.scrollTo(0,sx)}
+  on("#dZi","click",function(){setZoom((state.det.zoom||1)*1.25)});
+  on("#dZo","click",function(){setZoom((state.det.zoom||1)/1.25)});
+  on("#dZr","click",function(){setZoom(1)});
+  on("#dZf","click",function(){var b=document.getElementById("dChartBox"),sv=b&&b.querySelector("svg");if(!sv)return;setZoom((b.clientWidth-4)/(+sv.getAttribute("data-basew")))});
+  on("#dReset","click",function(){state.det={kelas:"",cari:"",sid:state.det.sid,d1:"",d2:"",cat:"",mode:"mingguan",zoom:1};render()});
   on("#dPdf","click",printDetail);
   on("#dPrint","click",printDetail);
   on("#dExp","click",function(){
