@@ -106,7 +106,7 @@ tr:last-child td{border-bottom:0}
 <div id="login" class="login"><form class="lbox" id="loginF" autocomplete="off">
   <h2>DATA PELANGGARAN SISWA</h2><p class="muted">Silakan masuk untuk melanjutkan</p>
   <label class="f">Masuk sebagai</label>
-  <select id="lRole"><option value="viewer">Viewer (hanya melihat data)</option><option value="admin">Admin</option></select>
+  <select id="lRole"><option value="viewer">Viewer</option><option value="admin">Admin</option></select>
   <div id="lPw" style="display:none;margin-top:10px">
     <label class="f">Password</label><input type="password" id="lPass" placeholder="Masukkan password" autocomplete="current-password">
     <a href="#" id="lForgot" style="display:inline-block;margin-top:6px;font-size:13px;color:var(--menu)">Lupa password?</a>
@@ -164,6 +164,9 @@ function fresh(){
   return {school:"",students:[],violations:v,records:[],settings:{autobackup:true,jamMasuk:"07:00",telatPoin:5}};
 }
 var db, ROLE="", legacyLocal=false;
+function isAdm(){return ROLE==="admin"||ROLE==="admin2"}
+function isMain(){return ROLE==="admin"}
+var A2KEY="dps_glhgsdr_auth2", A2KEY_P="dps_glhgsdr_auth2_pending";
 var FB="https://datapelanggaranspensa-default-rtdb.asia-southeast1.firebasedatabase.app/dps";
 var DKEY="dps_glhgsdr_dirty", AKEY="dps_glhgsdr_auth", AKEY_P="dps_glhgsdr_auth_pending";
 var H_DEF="843d75a1814c0e86c2e2ce7aabd6570cd5628e835bad62f465fa43d51740c0cb";
@@ -191,7 +194,7 @@ function hasData(d){return d&&(d.students.length||d.records.length)}
 function setSync(t){syncSt=t;var e=document.getElementById("syncSt");if(e)e.textContent=t}
 function stamp(){return new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})}
 function save(){
-  if(ROLE!=="admin")return;
+  if(!isAdm())return;
   db.updatedAt=Date.now();legacyLocal=false;
   localStorage.setItem(KEY,JSON.stringify(db));
   localStorage.setItem(DKEY,"1");
@@ -202,7 +205,7 @@ function save(){
 }
 function withTimeout(p,ms){return Promise.race([p,new Promise(function(_,rej){setTimeout(function(){rej("timeout")},ms)})])}
 function push(){
-  if(ROLE!=="admin")return Promise.resolve();
+  if(!isAdm())return Promise.resolve();
   if(!navigator.onLine){setSync("Offline – tersimpan lokal");return Promise.resolve()}
   var sent=db.updatedAt;setSync("Menyinkronkan...");
   return withTimeout(fetch(FB+"/data.json",{method:"PUT",body:JSON.stringify(db)}),15000).then(function(r){
@@ -213,7 +216,7 @@ function push(){
     setSync("Tersinkron online "+stamp());
   }).catch(function(){setSync("Gagal sinkron – tersimpan lokal")});
 }
-function pushPw(){
+function pushPw(){pushPw2();
   var h=localStorage.getItem(AKEY_P);if(!h||!navigator.onLine)return;
   fetch(FB+"/auth/adminHash.json",{method:"PUT",body:JSON.stringify(h)}).then(function(r){if(r.ok)localStorage.removeItem(AKEY_P)}).catch(function(){});
 }
@@ -246,7 +249,7 @@ function pull(){
   if(!navigator.onLine){setSync("Offline – data lokal");return}
   if(ROLE==="viewer"){setSync("Memuat...");pullViewer();return}
   pushPw();
-  if(localStorage.getItem(DKEY)&&ROLE==="admin"){push();return}
+  if(localStorage.getItem(DKEY)&&isAdm()){push();return}
   setSync("Memeriksa pembaruan...");
   /* Hemat read: cek dulu penanda waktu kecil (meta). Data penuh hanya diunduh bila ada perubahan. */
   withTimeout(fetch(FB+"/meta/updatedAt.json"),10000).then(function(r){if(!r.ok)throw r.status;return r.json()}).then(function(mt){
@@ -258,13 +261,13 @@ function pull(){
 function pullFull(){
   withTimeout(fetch(FB+"/data.json"),15000).then(function(r){if(!r.ok)throw r.status;return r.json()}).then(function(remote){
     if(!remote){
-      if(hasData(db)&&ROLE==="admin"){if(!db.updatedAt)db.updatedAt=Date.now();save()}
+      if(hasData(db)&&isAdm()){if(!db.updatedAt)db.updatedAt=Date.now();save()}
       else setSync("Online (database online masih kosong)");
       return;
     }
     remote=normalize(remote);
     if(legacyLocal&&hasData(db)){
-      if(ROLE!=="admin"){db=remote;setSync("Menampilkan data online");render();return}
+      if(!isAdm()){db=remote;setSync("Menampilkan data online");render();return}
       var useOnline=confirm("Ditemukan data lokal lama di perangkat ini dan data di database online.\n\nOK = gunakan data ONLINE (data lokal tetap tersimpan di autobackup)\nBatal = gunakan data LOKAL dan unggah ke online");
       if(useOnline){try{localStorage.setItem(BKEY,JSON.stringify({at:new Date().toISOString(),data:db}))}catch(e){}
         db=remote;legacyLocal=false;localStorage.setItem(KEY,JSON.stringify(db));setSync("Tersinkron online "+stamp());render()}
@@ -274,7 +277,7 @@ function pullFull(){
     if((remote.updatedAt||0)>(db.updatedAt||0)){
       db=remote;localStorage.setItem(KEY,JSON.stringify(db));render();
       if(db.updatedAt)fetch(FB+"/meta.json",{method:"PUT",body:JSON.stringify({updatedAt:db.updatedAt})}).catch(function(){});
-    }else if((remote.updatedAt||0)<(db.updatedAt||0)&&ROLE==="admin"){push();return}
+    }else if((remote.updatedAt||0)<(db.updatedAt||0)&&isAdm()){push();return}
     setSync("Tersinkron online "+stamp());
   }).catch(function(){setSync("Gagal terhubung – data lokal")});
 }
@@ -290,6 +293,23 @@ function getAdminHash(){
     if(typeof h==="string"&&h.length===64){localStorage.setItem(AKEY,h);return h}
     return local;
   }).catch(function(){return local});
+}
+function getAdmin2Hash(){
+  var dflt=sha("admin");
+  var local=localStorage.getItem(A2KEY);
+  var base=local?Promise.resolve(local):dflt;
+  if(!navigator.onLine||localStorage.getItem(A2KEY_P))return base;
+  return withTimeout(fetch(FB+"/auth/admin2Hash.json").then(function(r){return r.json()}),5000).then(function(h){
+    if(typeof h==="string"&&h.length===64){localStorage.setItem(A2KEY,h);return h}
+    return base;
+  }).catch(function(){return base});
+}
+function pushPw2(){
+  var h=localStorage.getItem(A2KEY_P);if(!h||!navigator.onLine)return;
+  fetch(FB+"/auth/admin2Hash.json",{method:"PUT",body:JSON.stringify(h)}).then(function(r){if(r.ok)localStorage.removeItem(A2KEY_P)}).catch(function(){});
+}
+function setAdmin2Pw(p){
+  sha(p).then(function(h){localStorage.setItem(A2KEY,h);localStorage.setItem(A2KEY_P,h);pushPw2()});
 }
 function setAdminPw(p){
   sha(p).then(function(h){localStorage.setItem(AKEY,h);localStorage.setItem(AKEY_P,h);pushPw()});
@@ -359,12 +379,12 @@ var PAGES=[
  ["input","✍️ Input Pelanggaran"],["telat","⏰ Terlambat"],["rekap","📊 Rekapitulasi"],["detail","🧾 Rekap per Siswa"],["backup","💾 Backup & Reset"]
 ];
 var VIEWER_PAGES={dash:1,siswa:1,jenis:1,rekap:1,detail:1};
-function allowed(p){return ROLE==="admin"||VIEWER_PAGES[p]}
+function allowed(p){return isMain()||(ROLE==="admin2"&&p!=="backup")||VIEWER_PAGES[p]}
 var page="dash";
 function renderNav(){
   $("#nav").innerHTML=PAGES.filter(function(p){return allowed(p[0])}).map(function(p){
     return '<button data-p="'+p[0]+'" class="'+(page===p[0]?"active":"")+'">'+p[1]+'</button>';
-  }).join("")+'<div class="who">Masuk sebagai: <b>'+(ROLE==="admin"?"Admin":"Viewer")+'</b><br><span id="syncSt">'+esc(syncSt)+'</span><br><button class="btn sec" id="syncBtn" type="button" style="margin-top:6px;padding:4px 10px;font-size:12px">⟳ Sinkron</button>'+
+  }).join("")+'<div class="who">Masuk sebagai: <b>'+(isMain()?"Admin Utama":ROLE==="admin2"?"Admin Kedua":"Viewer")+'</b><br><span id="syncSt">'+esc(syncSt)+'</span><br><button class="btn sec" id="syncBtn" type="button" style="margin-top:6px;padding:4px 10px;font-size:12px">⟳ Sinkron</button>'+
   '<button id="logout">⎋ Keluar</button></div>';
 }
 $("#nav").addEventListener("click",function(e){
@@ -372,22 +392,43 @@ $("#nav").addEventListener("click",function(e){
   var b=e.target.closest("button[data-p]");if(!b)return;
   page=b.dataset.p;$("#side").classList.remove("open");render();
 });
+document.addEventListener("click",function(e){
+  var b=e.target.closest&&e.target.closest("button");
+  if(b&&a2Blocked(b)){e.stopPropagation();e.preventDefault();toast("Admin Kedua tidak memiliki akses untuk aksi ini.")}
+},true);
 $("#burger").addEventListener("click",function(){$("#side").classList.toggle("open")});
 
 /* ============ HEADER ============ */
-$("#school").addEventListener("input",function(){if(ROLE!=="admin")return;db.school=this.value;save()});
+$("#school").addEventListener("input",function(){if(!isAdm())return;db.school=this.value;save()});
 function renderHead(){
-  $("#school").value=db.school||"";$("#school").readOnly=ROLE!=="admin";
+  $("#school").value=db.school||"";$("#school").readOnly=!isAdm();
   $("#tpLabel").textContent=tpOf(state.tanggal||todayISO());
 }
 
 var state={kelas:"",cari:"",tanggal:todayISO(),rekap:{d1:"",d2:"",kelas:"",cat:"",cari:""},det:{kelas:"",cari:"",sid:"",d1:"",d2:"",cat:"",mode:"mingguan",zoom:1}};
 
 /* ============ RENDER ============ */
-var VIEW_OK_BTN={rToday:1,rReset:1,expDetail:1,expRekap:1,expPerSiswa:1,doPrint:1,expTelat:1,expStud:1,dExp:1,dPdf:1,dPrint:1,dReset:1};
+var VIEW_OK_BTN={rToday:1,rReset:1,expDetail:1,expRekap:1,expPerSiswa:1,doPrint:1,expTelat:1,expStud:1,dExp:1,dPdf:1,dPrint:1,dReset:1,dZo:1,dZi:1,dZf:1,dZr:1};
 var VIEW_OK_IN={fK:1,fC:1,fT:1,rd1:1,rd2:1,rk:1,rc:1,rq:1,dK:1,dQ:1,dS:1,dD1:1,dD2:1,dC:1,dM:1,vSearch:1};
+var A2_HIDE=["data-edits","data-dels","data-editv","data-delv"],A2_HIDE_ID={addStud:1,addBulk:1,addV:1,addBulkV:1,saveStud:1,saveVio:1,delAllStud:1,delAllV:1,restoreDef:1};
+function a2Blocked(b){
+  if(ROLE!=="admin2"||!b)return false;
+  if(A2_HIDE_ID[b.id])return true;
+  for(var i=0;i<A2_HIDE.length;i++)if(b.hasAttribute(A2_HIDE[i]))return true;
+  var rid=b.getAttribute("data-delr")||b.getAttribute("data-editr")||b.getAttribute("data-editt");
+  if(rid){var r=db.records.find(function(x){return x.id===rid});return !r||r.tanggal!==todayISO()}
+  return false;
+}
 function applyRole(){
-  if(ROLE==="admin")return;
+  if(ROLE==="admin2"){
+    ["addStud","addV"].forEach(function(id){
+      var b=document.getElementById(id),card=b&&b.closest(".card");
+      if(card){card.style.display="none";Array.prototype.forEach.call(card.querySelectorAll("input,select,textarea,button"),function(el){el.disabled=true})}
+    });
+    Array.prototype.forEach.call($("#view").querySelectorAll("button"),function(b){if(a2Blocked(b))b.style.display="none"});
+    return;
+  }
+  if(isAdm())return;
   var v=$("#view");
   Array.prototype.forEach.call(v.querySelectorAll("button,label.btn"),function(b){if(!VIEW_OK_BTN[b.id])b.style.display="none"});
   Array.prototype.forEach.call(v.querySelectorAll("input,select,textarea"),function(i){if(!VIEW_OK_IN[i.id])i.disabled=true});
@@ -805,6 +846,10 @@ function vDetail(){
    '<h3>Grafik Perubahan Pelanggaran</h3><div class="row btns"><div><label class="f">Periode grafik</label><select id="dM">'+
    ['mingguan','bulanan'].map(function(m){return '<option value="'+m+'" '+(f.mode===m?"selected":"")+'>'+m.charAt(0).toUpperCase()+m.slice(1)+'</option>'}).join("")+
    '</select></div></div>'+lineChartHTML(recs,f.mode==='bulanan'?'bulanan':'mingguan',s.nama,f.d1,f.d2,f.zoom||1)+
+   (function(){var m={};recs.forEach(function(r){var k=namaOf(r);(m[k]=m[k]||{n:0,p:0,c:catOf(r)});m[k].n++;m[k].p+=(+poinOf(r)||0)});
+     var a=Object.keys(m).filter(function(k){return m[k].n>=5}).sort(function(x,y){return m[y].n-m[x].n});
+     return '<h3>Pelanggaran Berulang (5 kali atau lebih)</h3>'+(a.length?tableHTML(["No","Nama Pelanggaran","Kategori","Jumlah","Total Poin"],a.map(function(k,i){
+       return [i+1,esc(k),'<span class="tag '+catClass(m[k].c)+'">'+esc(m[k].c)+'</span>',m[k].n+' kali',m[k].p]})):'<p class="muted">Tidak ada pelanggaran yang dilakukan 5 kali atau lebih pada periode ini.</p>')})()+
    '<h3>Detail Pelanggaran ('+recs.length+')</h3>'+
    tableHTML(["No","Tanggal","Pelanggaran","Kategori","Poin","Catatan","Aksi"],recs.map(function(r,i){
      return [i+1,r.tanggal,esc(namaOf(r))+(r.telat?' <span class="muted">('+esc(r.jamDatang||"")+', '+menitTelat(r)+' mnt)</span>':""),
@@ -836,7 +881,7 @@ function vBackup(){
   '<div id="mrgRes"></div>'+
   '<h3>Bagikan Backup</h3><p class="muted">Kirim file backup JSON lewat WhatsApp, Telegram, Google Drive, email, dll.</p>'+
   '<div class="btns"><button class="btn" id="shareBk">📤 Share Backup</button></div>'+
-  (ROLE==="admin"?(function(){var c=ghCfg();return '<h3>Simpan JSON ke GitHub (untuk Viewer)</h3><p class="muted">File JSON ini yang dibaca oleh Viewer. Token hanya tersimpan di perangkat ini.</p>'+
+  (isAdm()?(function(){var c=ghCfg();return '<h3>Simpan JSON ke GitHub (untuk Viewer)</h3><p class="muted">File JSON ini yang dibaca oleh Viewer. Token hanya tersimpan di perangkat ini.</p>'+
   '<div class="row"><div><label class="f">Pemilik (owner)</label><input id="ghO" value="'+esc(c.owner)+'"></div><div><label class="f">Repositori</label><input id="ghR" value="'+esc(c.repo)+'"></div></div>'+
   '<div class="row"><div><label class="f">Branch</label><input id="ghB" value="'+esc(c.branch)+'"></div><div><label class="f">Path file</label><input id="ghP" value="'+esc(c.path)+'"></div></div>'+
   '<div><label class="f">Token GitHub (izin Contents: Read & Write)</label><input type="password" id="ghT" autocomplete="off" value="'+esc(localStorage.getItem(TKEY)||"")+'"></div>'+
@@ -854,7 +899,11 @@ function vBackup(){
   '<div><label class="f">Password baru</label><input type="password" id="pw1" autocomplete="new-password"></div>'+
   '<div><label class="f">Ulangi password baru</label><input type="password" id="pw2" autocomplete="new-password"></div></div>'+
   '<div class="btns"><button class="btn" id="chPw">Simpan Password</button></div>'+
-  '<p class="muted">Password disimpan (terenkripsi hash) di database online dan di perangkat ini.</p></div>';
+  '<p class="muted">Password disimpan (terenkripsi hash) di database online dan di perangkat ini.</p></div>'+
+  '<div class="card"><h2>Ganti Password Admin Kedua</h2><p class="muted">Password awal Admin Kedua: <b>admin</b>. Admin Kedua hanya bisa input pelanggaran & terlambat, serta edit/hapus catatan pada hari yang sama.</p><div class="row">'+
+  '<div><label class="f">Password baru Admin Kedua</label><input type="password" id="pw21" autocomplete="new-password"></div>'+
+  '<div><label class="f">Ulangi password baru</label><input type="password" id="pw22" autocomplete="new-password"></div></div>'+
+  '<div class="btns"><button class="btn" id="chPw2">Simpan Password Admin Kedua</button></div></div>';
 }
 
 /* ============ BIND ============ */
@@ -890,6 +939,13 @@ function bind(){
       ["No","Tanggal","Pelanggaran","Kategori","Poin","Jam Datang","Menit Telat","Catatan"],
       recs.map(function(r,i){return [i+1,r.tanggal,namaOf(r),catOf(r),poinOf(r),r.telat?(r.jamDatang||""):"",r.telat?menitTelat(r):"",r.catatan||""]}));
   });
+  on("#chPw2","click",function(){
+    if(!isMain())return;
+    var a=$("#pw21").value,b=$("#pw22").value;
+    if(a.length<4)return toast("Password minimal 4 karakter.");
+    if(a!==b)return toast("Ulangi password tidak sama.");
+    setAdmin2Pw(a);$("#pw21").value=$("#pw22").value="";toast("Password Admin Kedua disimpan.");
+  });
   on("#chPw","click",function(){
     var a=$("#pw1").value,b=$("#pw2").value;
     if(a.length<4)return toast("Password minimal 4 karakter.");
@@ -898,11 +954,13 @@ function bind(){
   });
 
   on("#addStud","click",function(){
+    if(!isMain())return;
     var k=$("#sK").value.trim(),n=$("#sN").value.trim(),i=$("#sI").value.trim(),j=$("#sJ").value;
     if(!k||!n) return toast("Kelas dan Nama wajib diisi.");
     db.students.push({id:uid(),kelas:k,nama:n,nisn:i,jk:j,absen:0});save();render();
   });
   on("#addBulk","click",function(){
+    if(!isMain())return;
     var k=$("#bK").value.trim(), t=$("#bT").value.trim();
     if(!t) return toast("Data kosong.");
     var c=0, skip=0;
@@ -947,10 +1005,12 @@ function bind(){
   }); }
 
   on("#addV","click",function(){
+    if(!isMain())return;
     var n=$("#vN").value.trim();if(!n)return toast("Nama pelanggaran wajib diisi.");
     db.violations.push({id:uid(),cat:$("#vC").value,nama:n,poin:parseInt($("#vP").value||"0",10)});save();render();
   });
   on("#addBulkV","click",function(){
+    if(!isMain())return;
     var c=$("#bvC").value,t=$("#bvT").value.trim();if(!t)return toast("Data kosong.");
     var n=0;t.split(/\r?\n/).forEach(function(l){
       if(!l.trim())return;var p=splitLine(l);if(!p[0])return;
@@ -1124,11 +1184,13 @@ $("#modalBox").addEventListener("click",function(e){
     save();closeModal();render();toast(n+" pelanggaran tersimpan.");
   }
   if(b.id==="saveStud"){
+    if(!isMain())return;
     var s=stud(b.dataset.s);if(!s)return;
     s.kelas=$("#eK").value.trim();s.nama=$("#eN").value.trim();s.nisn=$("#eI").value.trim();s.jk=$("#eJ").value;
     s.absen=parseInt($("#eA").value||"0",10)||0;save();closeModal();render();
   }
   if(b.id==="saveVio"){
+    if(!isMain())return;
     var vv=db.violations.find(function(x){return x.id===b.dataset.v});if(!vv)return;
     vv.nama=$("#evN").value.trim();vv.poin=parseInt($("#evP").value||"0",10)||0;vv.cat=$("#evC").value;
     save();closeModal();render();toast("Poin diperbarui, total poin siswa ikut menyesuaikan.");
@@ -1188,7 +1250,7 @@ function enter(role){
   document.body.classList.toggle("viewer",role==="viewer");
   render();pull();
 }
-$("#lRole").addEventListener("change",function(){$("#lPw").style.display=this.value==="admin"?"block":"none"});
+$("#lRole").addEventListener("change",function(){$("#lPw").style.display=this.value!=="viewer"?"block":"none";$("#lForgot").style.display=this.value==="admin"?"inline-block":"none";$("#lBakW").style.display="none"});
 $("#lForgot").addEventListener("click",function(e){e.preventDefault();var w=$("#lBakW");w.style.display=w.style.display==="none"?"block":"none"});
 $("#loginF").addEventListener("submit",function(e){
   e.preventDefault();var err=$("#lErr");err.textContent="";
@@ -1205,12 +1267,14 @@ $("#loginF").addEventListener("submit",function(e){
       },300);
     });return;
   }
-  Promise.all([sha(pw),getAdminHash()]).then(function(a){
-    if(a[0]===a[1]){err.textContent="";enter("admin")}else err.textContent="Password salah.";
+  Promise.all([sha(pw),getAdminHash(),getAdmin2Hash()]).then(function(a){
+    if(a[0]===a[1]){err.textContent="";enter("admin")}
+    else if(a[0]===a[2]){err.textContent="";enter("admin2")}
+    else err.textContent="Password salah.";
   });
 });
 var savedRole=sessionStorage.getItem("dps_role");
-if(savedRole==="admin"||savedRole==="viewer")enter(savedRole);else showLogin();
+if(savedRole==="admin"||savedRole==="admin2"||savedRole==="viewer")enter(savedRole);else showLogin();
 window.addEventListener("online",pull);
 /* Tidak ada polling otomatis (hemat kuota read). Gunakan tombol Sinkron. */
 document.addEventListener("click",function(e){if(e.target&&e.target.id==="syncBtn"){pull()}});
